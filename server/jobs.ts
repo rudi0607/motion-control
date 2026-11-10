@@ -16,6 +16,7 @@ import {
   run,
 } from "./media.js";
 import { PROVIDER_NAME, REQUIRED_ENV, adapters, getModel } from "./providers/index.js";
+import { selfhostedHealth } from "./providers/selfhosted.js";
 import type { GenerationSettings, ModelSpec } from "./providers/types.js";
 import { type QualityCheck, runServerChecks } from "./quality.js";
 
@@ -155,8 +156,6 @@ export function validateInputs(model: ModelSpec, s: GenerationSettings, image: M
   if (video.durationSec < model.minDurationSec) warnings.push(`Reference is shorter than ${model.minDurationSec} s; ${model.label} may reject it.`);
   if (Math.min(video.width, video.height) < 360) warnings.push(`Reference video is low resolution (${video.width}×${video.height}); pose extraction may be less accurate.`);
   if (s.motionStrength !== 100) warnings.push("Motion Strength is not exposed by any connected model API; the full reference motion will be used.");
-  if (model.id.startsWith("kling") && s.identityLock && s.cameraMotionTransfer)
-    warnings.push("Kling only supports facial element binding with Camera Motion Transfer off. Identity is enforced through the image and prompt only.");
   if (!model.capabilities.cameraMotion.supported && s.cameraMotionTransfer) warnings.push(`${model.label} does not transfer camera motion.`);
   const shortEdge = RESOLUTION_SHORT_EDGE[s.resolution];
   if (shortEdge > 1080) warnings.push(`${s.resolution.toUpperCase()} is produced by Lanczos upscaling of the model's native output, not native generation.`);
@@ -190,6 +189,10 @@ export async function createJob(input: CreateJobInput): Promise<Job> {
   const adapter = adapters[input.model.provider];
   if (!adapter.configured())
     throw new Error(`${REQUIRED_ENV[input.model.provider]} is not set on the server, so ${input.model.label} cannot run. Add it to the environment and restart.`);
+  const health = await selfhostedHealth();
+  if (!health.ok) throw new Error(`GPU worker is not ready: ${health.problems.join(" · ")}`);
+  if (health.backend && health.backend !== input.model.workerBackend)
+    throw new Error(`Your GPU worker runs ${health.backend}; select the matching model (this one needs WAN_BACKEND=${input.model.workerBackend}).`);
   const { imageInfo, videoInfo } = await probeInputs(input.imagePath, input.videoPath);
   const v = validateInputs(input.model, input.settings, imageInfo, videoInfo);
   if (v.errors.length) throw new Error(v.errors.join(" "));

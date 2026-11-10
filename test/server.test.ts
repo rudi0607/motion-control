@@ -4,8 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { frameStats, freezeIntervals, prepareReferenceVideo, probe, renderFinal, run } from "../server/media";
 import { runServerChecks } from "../server/quality";
-import { buildFalInput } from "../server/providers/fal";
-import { buildReplicateInput } from "../server/providers/replicate";
 import { buildSelfhostedInput } from "../server/providers/selfhosted";
 import { getModel } from "../server/providers/index";
 import { parseSettings } from "../server/settings";
@@ -48,53 +46,41 @@ describe("settings", () => {
   });
 });
 
-describe("provider payloads", () => {
-  it("Kling binds a facial element with orientation=video when identity lock is on", () => {
-    const input = buildFalInput(getModel("kling-v3-pro")!, req({}, ["https://x/face.png"])) as any;
-    expect(input.character_orientation).toBe("video");
-    expect(input.elements).toEqual([{ frontal_image_url: "https://x/face.png", reference_image_urls: ["https://x/img.png"] }]);
-    expect(input.prompt).toContain("@Element1");
-    expect(input.prompt).toMatch(/Do not use the reference video person's face/);
-    expect(input.keep_original_sound).toBe(true);
+describe("worker payloads", () => {
+  it("VACE 1.3B (8 GB GPUs) sends backend, 480p and step counts", () => {
+    const m = getModel("wan-2.1-vace-selfhosted")!;
+    expect(buildSelfhostedInput(m, req({ seed: 9, motionAccuracy: "maximum" }))).toEqual({
+      image_file: "https://x/img.png",
+      video_file: "https://x/ref.mp4",
+      backend: "vace-1.3b",
+      resolution: "480p",
+      refert_num: 5,
+      sample_steps: 40,
+      seed: 9,
+    });
+    expect(buildSelfhostedInput(m, req({ motionAccuracy: "balanced" }))).toMatchObject({ sample_steps: 25 });
   });
 
-  it("Kling camera motion uses orientation=image and drops element binding", () => {
-    const input = buildFalInput(getModel("kling-v3-standard")!, req({ cameraMotionTransfer: true })) as any;
-    expect(input.character_orientation).toBe("image");
-    expect(input.elements).toBeUndefined();
-    expect(input.prompt).not.toContain("@Element1");
-  });
-
-  it("Wan (fal) maps accuracy and seed", () => {
-    const input = buildFalInput(getModel("wan-2.2-animate-fal")!, req({ seed: 42, motionAccuracy: "maximum" })) as any;
-    expect(input).toMatchObject({ resolution: "720p", num_inference_steps: 30, video_quality: "maximum", seed: 42 });
-    expect(input.prompt).toBeUndefined();
-  });
-
-  it("Self-hosted worker maps accuracy, seed and file ids", () => {
-    const input = buildSelfhostedInput(req({ seed: 9, motionAccuracy: "maximum" })) as any;
-    expect(input).toEqual({ image_file: "https://x/img.png", video_file: "https://x/ref.mp4", resolution: "720p", refert_num: 5, sample_steps: 30, seed: 9 });
-    expect(buildSelfhostedInput(req({ motionAccuracy: "balanced" }))).toMatchObject({ refert_num: 1, sample_steps: 20 });
-  });
-
-  it("Wan (Replicate) generates natively at the requested fps", () => {
-    const input = buildReplicateInput(req({ fps: 50, keepAudio: false, motionAccuracy: "balanced" })) as any;
-    expect(input).toMatchObject({ frames_per_second: 50, refert_num: 1, go_fast: true, merge_audio: false, resolution: "720" });
+  it("Animate 14B maps accuracy to refert_num and steps", () => {
+    const m = getModel("wan-2.2-animate-selfhosted")!;
+    expect(buildSelfhostedInput(m, req({ motionAccuracy: "maximum" }))).toMatchObject({ backend: "animate-14b", resolution: "720p", refert_num: 5, sample_steps: 30 });
+    expect(buildSelfhostedInput(m, req({ motionAccuracy: "balanced" }))).toMatchObject({ refert_num: 1, sample_steps: 20 });
   });
 });
 
 describe("validation", () => {
   const img = { width: 800, height: 1200 } as any;
-  it("enforces Kling duration limits per orientation", () => {
-    const m = getModel("kling-v3-pro")!;
-    expect(validateInputs(m, parseSettings({}), img, { durationSec: 25, width: 1080, height: 1920 } as any).errors).toHaveLength(0);
-    expect(validateInputs(m, parseSettings({ cameraMotionTransfer: true }), img, { durationSec: 25, width: 1080, height: 1920 } as any).errors[0]).toMatch(/at most 10 s/);
-    const trimmed = validateInputs(m, parseSettings({ cameraMotionTransfer: true, trimToModelLimit: true }), img, { durationSec: 25, width: 1080, height: 1920 } as any);
+  it("enforces the VACE clip limit and allows trimming", () => {
+    const m = getModel("wan-2.1-vace-selfhosted")!;
+    const long = { durationSec: 12, width: 1080, height: 1920 } as any;
+    expect(validateInputs(m, parseSettings({}), img, { ...long, durationSec: 4 }).errors).toHaveLength(0);
+    expect(validateInputs(m, parseSettings({}), img, long).errors[0]).toMatch(/at most 5 s/);
+    const trimmed = validateInputs(m, parseSettings({ trimToModelLimit: true }), img, long);
     expect(trimmed.errors).toHaveLength(0);
     expect(trimmed.warnings.join(" ")).toMatch(/trimmed/);
   });
   it("rejects tiny or extreme-aspect character images", () => {
-    const m = getModel("kling-v3-pro")!;
+    const m = getModel("wan-2.2-animate-selfhosted")!;
     const v = { durationSec: 5, width: 1280, height: 720 } as any;
     expect(validateInputs(m, parseSettings({}), { width: 200, height: 200 } as any, v).errors.length).toBeGreaterThan(0);
     expect(validateInputs(m, parseSettings({}), { width: 3000, height: 400 } as any, v).errors.length).toBeGreaterThan(0);
@@ -144,6 +130,15 @@ describe("media pipeline", () => {
     expect(by.duration).toBe("pass");
     expect(by.av_sync).toBe("pass");
     expect(by.flicker).toBe("pass");
+  });
+
+  it("keeps the full reference duration when interpolating 16 fps up to 30 fps", async () => {
+    await ff("-f", "lavfi", "-i", "testsrc2=size=480x832:rate=16:duration=4", "-c:v", "libx264", "-pix_fmt", "yuv420p", f("vace16.mp4"));
+    const raw = await probe(f("vace16.mp4"));
+    await renderFinal(f("vace16.mp4"), f("vace30.mp4"), raw, { targetShortEdge: 720, fps: 30, motionInterpolation: true, deflicker: false, durationSec: 4, keepProviderAudio: false });
+    const out = await probe(f("vace30.mp4"));
+    expect(out.fps).toBeCloseTo(30, 0);
+    expect(Math.abs(out.durationSec - 4)).toBeLessThan(0.05);
   });
 
   it("flags flicker and the deflicker re-render reduces it", async () => {

@@ -1,7 +1,7 @@
 import type { GenerationSettings } from "./providers/types.js";
 
 export const DEFAULT_SETTINGS: GenerationSettings = {
-  modelId: "wan-2.2-animate-selfhosted",
+  modelId: "wan-2.1-vace-selfhosted",
   resolution: "1080p",
   fps: 30,
   motionStrength: 100,

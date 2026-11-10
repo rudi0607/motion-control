@@ -157,7 +157,7 @@ export default function App() {
     }
   };
 
-  const noProvider = !config.providers.fal && !config.providers.replicate && !config.providers.selfhosted;
+  const noProvider = !config.providers.selfhosted;
   const sh = config.selfhostedHealth;
   const chip = (on: boolean, label: string, state: string) => (
     <span className={`chip ${on ? "bg-emerald-500/15 text-emerald-300" : "bg-ink-800 text-ink-400"}`}>
@@ -182,8 +182,6 @@ export default function App() {
         </div>
         <div className="flex flex-wrap gap-2 text-xs">
           {chip(!!sh?.ok, "Self-hosted GPU", !config.providers.selfhosted ? "not configured" : sh?.ok ? `ready · ${sh.gpus.join(", ")}` : "unhealthy")}
-          {chip(config.providers.fal, "fal.ai", config.providers.fal ? "connected" : "not configured")}
-          {chip(config.providers.replicate, "Replicate", config.providers.replicate ? "connected" : "not configured")}
         </div>
       </header>
 
@@ -195,10 +193,9 @@ export default function App() {
 
       {noProvider && (
         <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-          No generation backend is configured. Deploy the GPU worker in <code className="text-amber-300">worker/</code> and set{" "}
-          <code className="text-amber-300">SELFHOSTED_WORKER_URL</code> + <code className="text-amber-300">SELFHOSTED_WORKER_TOKEN</code>, or set{" "}
-          <code className="text-amber-300">FAL_KEY</code> / <code className="text-amber-300">REPLICATE_API_TOKEN</code>, then restart. Uploading and landmark analysis work
-          without a backend; generation does not.
+          GPU worker is not connected. Start it with <code className="text-amber-300">docker compose up -d</code> (see README), or set{" "}
+          <code className="text-amber-300">SELFHOSTED_WORKER_URL</code> + <code className="text-amber-300">SELFHOSTED_WORKER_TOKEN</code> and restart. Uploading
+          and landmark analysis work without it; generation does not.
         </div>
       )}
 

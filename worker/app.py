@@ -36,25 +36,45 @@ def env_bool(name: str, default: bool) -> bool:
 class Settings:
     token: str = os.environ.get("WORKER_TOKEN", "")
     data_dir: Path = Path(os.environ.get("WORKER_DATA_DIR", "/data/jobs"))
+    # "animate-14b": Wan2.2-Animate-14B (48–80 GB VRAM).
+    # "vace-1.3b":  Wan2.1-VACE-1.3B pose-to-video (consumer GPUs, ~8–12 GB VRAM, 480p).
+    backend: str = os.environ.get("WAN_BACKEND", "animate-14b")
     wan_repo: Path = Path(os.environ.get("WAN_REPO", "/opt/Wan2.2"))
     ckpt_dir: Path = Path(os.environ.get("WAN_CKPT_DIR", "/models/Wan2.2-Animate-14B"))
+    wan21_repo: Path = Path(os.environ.get("WAN21_REPO", "/opt/Wan2.1"))
+    vace_repo: Path = Path(os.environ.get("VACE_REPO", "/opt/VACE"))
+    vace_ckpt_dir: Path = Path(os.environ.get("VACE_CKPT_DIR", "/models/Wan2.1-VACE-1.3B"))
+    # Must be 4n+1. 81 frames = ~5 s at 16 fps; lower it if an 8 GB GPU runs out of memory.
+    vace_frames: int = int(os.environ.get("VACE_FRAME_NUM", "81"))
     python: str = os.environ.get("WAN_PYTHON", "python")
     # Retargeting with FLUX Kontext adapts the reference skeleton to the character's body shape.
     use_flux: bool = env_bool("WAN_USE_FLUX", True)
     retarget: bool = env_bool("WAN_RETARGET", True)
-    # Offload + dtype conversion + T5 on CPU for GPUs with < 80 GB.
+    # Offload + dtype conversion + T5 on CPU for GPUs with < 80 GB. Always on for vace-1.3b.
     low_vram: bool = env_bool("WAN_LOW_VRAM", False)
     num_gpus: int = int(os.environ.get("WAN_NUM_GPUS", "1"))
     max_duration_sec: float = float(os.environ.get("WORKER_MAX_DURATION_SEC", "30"))
     timeout_sec: int = int(os.environ.get("WORKER_JOB_TIMEOUT_SEC", str(3 * 3600)))
 
+    def effective_max_duration(self) -> float:
+        if self.backend == "vace-1.3b":
+            return round((self.vace_frames - 1) / VACE_FPS, 2)
+        return self.max_duration_sec
 
+
+VACE_FPS = 16
+VACE_PROMPT = (
+    "The person from the reference image performs the movements of the pose video. "
+    "Keep the exact same face, identity, skin tone, hairstyle, clothing and body proportions as the reference image. "
+    "Photorealistic, natural motion, stable lighting, real camera footage."
+)
 S = Settings()
 
 
 class JobParams(BaseModel):
     image_file: str
     video_file: str
+    backend: Optional[str] = None
     resolution: str = Field("720p", pattern="^(480p|720p)$")
     refert_num: int = Field(5, description="Temporal guidance frames: 1 or 5")
     sample_steps: int = Field(20, ge=4, le=60)
@@ -137,10 +157,68 @@ def build_commands(job: Job) -> list[list[str]]:
     return [pre, gen]
 
 
-def run_step(job: Job, cmd: list[str]) -> None:
+def video_size(path: Path) -> tuple[int, int]:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True, timeout=60,
+    )
+    w, h = (int(x) for x in out.stdout.strip().split(",")[:2])
+    return w, h
+
+
+def build_vace_prepare(job: Job) -> list[str]:
+    """Resample the reference to the model's 16 fps and frame budget."""
+    d = job_dir(job.id)
+    return ["ffmpeg", "-hide_banner", "-nostdin", "-y", "-i", str(d / "reference.mp4"),
+            "-vf", f"fps={VACE_FPS}", "-frames:v", str(S.vace_frames), "-an",
+            "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", str(d / "reference16.mp4")]
+
+
+def build_vace_pose(job: Job) -> list[str]:
+    d = job_dir(job.id)
+    return [S.python, str(S.vace_repo / "vace/vace_preproccess.py"), "--task", "pose",
+            "--video", str(d / "reference16.mp4"), "--pre_save_dir", str(d / "process_results")]
+
+
+def build_vace_generate(job: Job, width: int, height: int, frames: int) -> list[str]:
+    p = JobParams(**job.params)
+    d = job_dir(job.id)
+    size = "832*480" if width >= height else "480*832"
+    cmd = [
+        S.python, str(S.wan21_repo / "generate.py"),
+        "--task", "vace-1.3B",
+        "--size", size,
+        "--ckpt_dir", str(S.vace_ckpt_dir),
+        "--src_video", str(d / "process_results" / "src_video-pose.mp4"),
+        "--src_ref_images", str(d / "character.png"),
+        "--frame_num", str(frames),
+        "--sample_steps", str(p.sample_steps),
+        "--prompt", VACE_PROMPT,
+        "--save_file", str(d / "output.mp4"),
+        # 8 GB cards need the DiT offloaded between steps and T5 on the CPU.
+        "--offload_model", "True", "--t5_cpu",
+    ]
+    if p.seed is not None:
+        cmd += ["--base_seed", str(p.seed)]
+    return cmd
+
+
+def vace_frame_count(path: Path) -> int:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True, timeout=120,
+    )
+    n = int(out.stdout.strip() or 0)
+    if n < 5:
+        raise RuntimeError(f"Reference video is too short after resampling to {VACE_FPS} fps ({n} frames)")
+    return min(S.vace_frames, ((n - 1) // 4) * 4 + 1)
+
+
+def run_step(job: Job, cmd: list[str], cwd: Optional[Path] = None) -> None:
     job.commands.append(shlex.join(cmd))
+    cwd = cwd or S.wan_repo
     proc = subprocess.Popen(
-        cmd, cwd=S.wan_repo if S.wan_repo.exists() else None,
+        cmd, cwd=cwd if cwd.exists() else None,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
         start_new_session=True,
     )
@@ -161,20 +239,32 @@ def run_step(job: Job, cmd: list[str]) -> None:
         raise RuntimeError("canceled")
     if code != 0:
         tail = "\n".join(job.logs[-8:])
-        raise RuntimeError(f"{Path(cmd[1]).name} exited with code {code}:\n{tail}")
+        raise RuntimeError(f"{Path(cmd[1]).name if len(cmd) > 1 and cmd[0] == S.python else cmd[0]} exited with code {code}:\n{tail}")
 
 
 def process(job: Job) -> None:
     d = job_dir(job.id)
     job.started_at = time.time()
     try:
-        pre, gen = build_commands(job)
         job.status = "preprocessing"
         persist(job)
-        run_step(job, pre)
-        job.status = "generating"
-        persist(job)
-        run_step(job, gen)
+        if S.backend == "vace-1.3b":
+            run_step(job, build_vace_prepare(job))
+            frames = vace_frame_count(d / "reference16.mp4")
+            # VACE annotators resolve models/VACE-Annotators relative to the VACE repo.
+            run_step(job, build_vace_pose(job), cwd=S.vace_repo)
+            if not (d / "process_results" / "src_video-pose.mp4").exists():
+                raise RuntimeError("Pose extraction produced no src_video-pose.mp4 (no person detected?)")
+            w, h = video_size(d / "reference16.mp4")
+            job.status = "generating"
+            persist(job)
+            run_step(job, build_vace_generate(job, w, h, frames), cwd=S.wan21_repo)
+        else:
+            pre, gen = build_commands(job)
+            run_step(job, pre)
+            job.status = "generating"
+            persist(job)
+            run_step(job, gen)
         if not (d / "output.mp4").exists():
             raise RuntimeError("generate.py finished but output.mp4 was not written")
         job.status = "succeeded"
@@ -241,10 +331,24 @@ def gpu_info() -> list[str]:
 @app.get("/v1/health")
 def health(_: None = Depends(auth)):
     problems = []
-    if not (S.wan_repo / "generate.py").exists():
-        problems.append(f"Wan2.2 repo not found at {S.wan_repo}")
-    if not (S.ckpt_dir / "process_checkpoint").exists():
-        problems.append(f"Wan2.2-Animate-14B weights not found at {S.ckpt_dir}")
+    if S.backend == "vace-1.3b":
+        if not (S.wan21_repo / "generate.py").exists():
+            problems.append(f"Wan2.1 repo not found at {S.wan21_repo}")
+        if not (S.vace_repo / "vace/vace_preproccess.py").exists():
+            problems.append(f"VACE repo not found at {S.vace_repo}")
+        if not (S.vace_repo / "models/VACE-Annotators/pose").exists():
+            problems.append(f"VACE pose annotators not found at {S.vace_repo / 'models/VACE-Annotators/pose'}")
+        if not (S.vace_ckpt_dir / "config.json").exists():
+            problems.append(f"Wan2.1-VACE-1.3B weights not found at {S.vace_ckpt_dir}")
+        if (S.vace_frames - 1) % 4:
+            problems.append(f"VACE_FRAME_NUM must be 4n+1 (got {S.vace_frames})")
+    elif S.backend == "animate-14b":
+        if not (S.wan_repo / "generate.py").exists():
+            problems.append(f"Wan2.2 repo not found at {S.wan_repo}")
+        if not (S.ckpt_dir / "process_checkpoint").exists():
+            problems.append(f"Wan2.2-Animate-14B weights not found at {S.ckpt_dir}")
+    else:
+        problems.append(f"Unknown WAN_BACKEND {S.backend!r} (use animate-14b or vace-1.3b)")
     gpus = gpu_info()
     if not gpus:
         problems.append("No NVIDIA GPU visible (nvidia-smi failed)")
@@ -252,9 +356,10 @@ def health(_: None = Depends(auth)):
         "ok": not problems,
         "problems": problems,
         "gpus": gpus,
+        "backend": S.backend,
         "queue_length": len(queue),
-        "low_vram": S.low_vram,
-        "max_duration_sec": S.max_duration_sec,
+        "low_vram": S.low_vram or S.backend == "vace-1.3b",
+        "max_duration_sec": S.effective_max_duration(),
     }
 
 
@@ -281,6 +386,8 @@ def _file(fid: str) -> Path:
 def create_job(params: JobParams, _: None = Depends(auth)):
     if params.refert_num not in (1, 5):
         raise HTTPException(422, "refert_num must be 1 or 5")
+    if params.backend and params.backend != S.backend:
+        raise HTTPException(409, f"This worker runs {S.backend!r}, not {params.backend!r}. Pick the matching model in the app.")
     img, vid = _file(params.image_file), _file(params.video_file)
     job = Job(id=uuid.uuid4().hex, params=params.model_dump())
     d = job_dir(job.id)

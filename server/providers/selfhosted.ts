@@ -30,23 +30,38 @@ async function call(path: string, init: RequestInit = {}) {
 }
 
 /** Note: the URLs here are worker file ids returned by upload(). */
-export function buildSelfhostedInput(req: GenerateRequest): Record<string, unknown> {
+export function buildSelfhostedInput(model: ModelSpec, req: GenerateRequest): Record<string, unknown> {
   const s = req.settings;
   const max = s.motionAccuracy === "maximum";
+  const vace = model.workerBackend === "vace-1.3b";
   const input: Record<string, unknown> = {
     image_file: req.imageUrl,
     video_file: req.videoUrl,
-    resolution: "720p",
+    backend: model.workerBackend,
+    resolution: vace ? "480p" : "720p",
     refert_num: max ? 5 : 1,
-    sample_steps: max ? 30 : 20,
+    sample_steps: vace ? (max ? 40 : 25) : max ? 30 : 20,
   };
   if (s.seed !== null) input.seed = s.seed;
   return input;
 }
 
-export async function selfhostedHealth(): Promise<{ ok: boolean; problems: string[]; gpus: string[] } | { ok: false; problems: string[]; gpus: [] }> {
+export interface WorkerHealth {
+  ok: boolean;
+  problems: string[];
+  gpus: string[];
+  backend?: string;
+  max_duration_sec?: number;
+}
+
+/** Last successful health response, used for the worker's real duration limit. */
+export let lastHealth: WorkerHealth | null = null;
+
+export async function selfhostedHealth(): Promise<WorkerHealth> {
   try {
-    return await call("/v1/health", { signal: AbortSignal.timeout(5000) });
+    const h: WorkerHealth = await call("/v1/health", { signal: AbortSignal.timeout(5000) });
+    lastHealth = h;
+    return h;
   } catch (e) {
     return { ok: false, problems: [e instanceof Error ? e.message : String(e)], gpus: [] };
   }
@@ -63,8 +78,8 @@ export const selfhostedAdapter: ProviderAdapter = {
     return body.file_id as string;
   },
 
-  async submit(_model: ModelSpec, req) {
-    const input = buildSelfhostedInput(req);
+  async submit(model: ModelSpec, req) {
+    const input = buildSelfhostedInput(model, req);
     const body = await call("/v1/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

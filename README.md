@@ -2,33 +2,34 @@
 
 Animate an **existing AI character image** with the motion from any **reference video**. The character image is the only identity source; the reference video is used purely as a motion source.
 
-Generation runs on a real motion-transfer model. You can run the open-source model on **your own GPU** (no third-party API), or use hosted models through fal.ai or Replicate. Nothing is simulated: if no backend is configured, or generation fails, the UI shows the actual error.
+**Fully self-hosted.** Generation runs open-source Wan models on **your own GPU**. No third-party AI API is used, and every model the browser needs (MediaPipe pose, hand and face) is served from this app. After the one-time weight download, the whole stack runs offline. Nothing is simulated: if the GPU worker is missing or fails, the UI shows the real error.
 
-## Models
+## Models (pick the one that fits your GPU)
 
-| Model | Provider | Identity | Notes |
+| Model | GPU | Output | Notes |
 |---|---|---|---|
-| **Wan 2.2 Animate 14B (self-hosted)** | Your own GPU (`worker/`) | Character image | Open-source model, no third-party API. See [worker/README.md](worker/README.md) |
-| Kling v3 Pro Motion Control | fal.ai (`fal-ai/kling-video/v3/pro/motion-control`) | Facial element binding (`@Element1`) from an automatic face crop + optional extra angles | Orientation `video` (≤30 s, complex motion) or `image` (≤10 s, follows camera motion; no element binding) |
-| Kling v3 Standard Motion Control | fal.ai | Same as Pro | Cheaper |
-| Wan 2.2 Animate Move | fal.ai (`fal-ai/wan/v2.2-14b/animate/move`) | Character image | Seeded, 720p, no text prompt |
-| Wan 2.2 Animate | Replicate (`wan-video/wan-2.2-animate-animation`) | Character image | Generates natively at 5–60 fps |
+| **Wan 2.1 VACE 1.3B** (`WAN_BACKEND=vace-1.3b`, default) | 8–12 GB, e.g. RTX 3050/3060 | 480p, 16 fps (interpolated to your fps), ~5 s per clip | Pose skeleton from the reference drives your character image. Identity is weaker than Animate-14B. |
+| **Wan 2.2 Animate 14B** (`WAN_BACKEND=animate-14b`) | 48–80 GB | 720p, 30 fps, up to 30 s | Best quality: full body, face and expression transfer with retargeting |
 
-## Setup
+The worker runs one backend at a time, and the app enables only the model that matches it.
 
-### Fully self-hosted (one NVIDIA GPU machine, 48 GB+ VRAM)
+## Setup on one PC (single user)
+
+Requirements: an NVIDIA GPU, a recent NVIDIA driver, Docker with the NVIDIA Container Toolkit, and 32 GB of system RAM recommended (the T5 text encoder runs on the CPU in low-VRAM mode). On Windows, use **Docker Desktop with the WSL2 backend**; the GPU is passed through automatically.
 
 ```bash
-export WORKER_TOKEN=$(openssl rand -hex 32)
-docker compose up -d --build     # web app on :3000, GPU worker on the internal network
+export WORKER_TOKEN=$(openssl rand -hex 32)      # PowerShell: $env:WORKER_TOKEN = [guid]::NewGuid()
+docker compose up -d --build                     # app on http://localhost:3000
+docker compose logs -f worker                    # first boot downloads the weights once
 ```
 
-On first boot the worker downloads the Wan2.2-Animate-14B weights (about 100 GB). GPU sizing, a split app/worker setup, and the worker API are covered in [worker/README.md](worker/README.md).
+The app header turns green ("Self-hosted GPU ready · <your GPU>") once the worker is healthy. Out of memory on an 8 GB card? Set `VACE_FRAME_NUM=49` (≈3 s clips) in `docker-compose.yml` and restart. See [worker/README.md](worker/README.md) for details.
 
-### Local development
+### Local development (app only)
+
 ```bash
 npm install
-cp .env.example .env   # then set FAL_KEY and/or REPLICATE_API_TOKEN
+cp .env.example .env   # SELFHOSTED_WORKER_URL / SELFHOSTED_WORKER_TOKEN
 export $(grep -v '^#' .env | xargs)
 npm run dev            # http://localhost:3000 (Express + Vite)
 ```
@@ -38,26 +39,26 @@ Production: `npm run build && npm start`. Requires `ffmpeg`/`ffprobe` on `PATH` 
 ## Pipeline
 
 1. **Analyze reference video**: ffprobe, then normalise to H.264/AAC MP4 (and trim to the model limit if you allow it).
-2. **Extract pose, face and hand landmarks**: MediaPipe Pose/Hand/Face Landmarker runs frame by frame in the browser, with a live overlay. The models still do their own internal motion extraction; this step is for visualisation, pre-flight checks and QC.
-3. **Lock identity**: detect the character's face, crop it, and bind it as a Kling facial element. Identity-preservation prompt guidance is added for models that accept prompts.
-4. **Upload and generate**: files go to provider storage, and the job is submitted to the provider queue. Live queue position and logs stream to the UI over SSE. In-flight jobs resume polling after a server restart.
-5. **Temporal processing (ffmpeg)**: frame-rate conversion (motion-compensated interpolation when Motion Smoothing is on), resolution scaling, duration matched to the reference, and reference audio muxed in if needed.
+2. **Extract pose, face and hand landmarks**: MediaPipe runs frame by frame in the browser, with a live overlay, from locally served models. This step is for preview, pre-flight checks and QC; the worker does its own pose extraction for the model.
+3. **Identity reference**: detect the character's face and use the character image as the model's only appearance reference.
+4. **Generate on your GPU**: upload to the worker, where the official upstream scripts run (VACE pose annotator + Wan2.1 `generate.py`, or Wan2.2-Animate preprocess + `generate.py`). Queue position and logs stream live to the UI.
+5. **Temporal processing (ffmpeg)**: motion-compensated frame interpolation to your fps, resolution scaling, exact reference duration, and reference audio muxed in.
 6. **Quality checks**:
-   - ffmpeg (server): duration match, A/V sync, brightness flicker, sudden jumps, frozen motion, and motion-timing correlation, each compared against the reference.
-   - MediaPipe (browser): face-geometry identity consistency against the character image, facial landmark jitter, hand/finger plausibility, 3D bone-length stability, joint-angle motion accuracy, blinking, mouth motion, and expression liveliness.
-7. **Refine**: if flicker is flagged, the clip is re-rendered with a temporal deflicker filter and re-checked. Structural problems such as jumps or frozen segments can't be fixed locally, so the app offers **Regenerate**.
-8. **Render final MP4**: H.264 High, yuv420p, faststart, and a download button.
+   - ffmpeg (server): duration, A/V sync, brightness flicker, sudden jumps, frozen motion, and motion timing vs the reference.
+   - MediaPipe (browser): face-geometry identity vs the character image, landmark jitter, hand plausibility, bone-length stability, joint-angle motion accuracy, blinking, mouth motion, and expression liveliness.
+7. **Refine**: flicker triggers a deflicker re-render and a re-check. Structural problems can't be fixed locally, so the app offers **Regenerate**.
+8. **Render final MP4**: H.264 High, faststart, with a download button.
 
 ## Honest limitations
 
-- **Motion Strength** isn't exposed by any connected model API. The control is shown disabled.
-- **2K/4K** output is Lanczos-upscaled from the model's native resolution (≤1080p). It adds pixels, not generated detail.
-- Detail, background and scene options are **prompt guidance** (Kling only). Wan endpoints take no prompt.
-- Automated checks are heuristics on sampled frames. They can't prove that every frame is perfect. For example, the 21-point hand model can't count fingers, and face geometry is not face recognition. Flagged time ranges link to the player for manual review.
-- Lip sync comes from the reference performer's mouth motion. It isn't driven by an audio waveform.
+- On an 8 GB GPU, VACE-1.3B makes short 480p clips. It follows body pose well, but facial identity and fine expressions are noticeably weaker than Wan2.2-Animate-14B.
+- **Motion Strength** isn't exposed by the models. The control is shown disabled.
+- **2K/4K** output is a Lanczos upscale of the native output. It adds pixels, not detail.
+- The automated checks are heuristics on sampled frames and can't guarantee every frame is correct. Flagged time ranges link to the player.
+- Lip sync comes from the reference performer's mouth motion, not from the audio waveform.
 
 ## Scripts
 
-- `npm test`: Vitest (settings, provider payload mapping, validation, and real ffmpeg render + QC on synthetic clips)
-- `npm run typecheck`
-- `npm run build`
+- `npm test`: Vitest (settings, worker payloads, validation, real ffmpeg render + QC)
+- `npm run test:worker`: pytest for the GPU worker (API, queue, auth, both backends' command lines, using stub model scripts)
+- `npm run typecheck`, `npm run build`

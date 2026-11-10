@@ -38,7 +38,7 @@ const publicJob = (j: Job) => j;
 app.get("/api/config", async (_req, res) => {
   const selfhosted = adapters.selfhosted.configured() ? await selfhostedHealth() : null;
   res.json({
-    providers: { fal: adapters.fal.configured(), replicate: adapters.replicate.configured(), selfhosted: adapters.selfhosted.configured() },
+    providers: { selfhosted: adapters.selfhosted.configured() },
     selfhostedHealth: selfhosted,
     defaults: DEFAULT_SETTINGS,
     maxUploadMB: config.maxUploadBytes / 1024 / 1024,
@@ -46,7 +46,8 @@ app.get("/api/config", async (_req, res) => {
       ...m,
       maxDurationSec: undefined,
       maxDuration: { cameraOn: m.maxDurationSec({ ...DEFAULT_SETTINGS, cameraMotionTransfer: true }), cameraOff: m.maxDurationSec({ ...DEFAULT_SETTINGS, cameraMotionTransfer: false }) },
-      available: adapters[m.provider].configured(),
+      // Only the model matching the worker's WAN_BACKEND can run.
+      available: adapters[m.provider].configured() && (!selfhosted?.backend || selfhosted.backend === m.workerBackend),
       requiredEnv: REQUIRED_ENV[m.provider],
     })),
   });
@@ -176,6 +177,6 @@ if (config.isProd) {
 }
 
 app.listen(config.port, "0.0.0.0", () => {
-  const p = [adapters.selfhosted.configured() && "self-hosted GPU", adapters.fal.configured() && "fal.ai", adapters.replicate.configured() && "Replicate"].filter(Boolean);
-  console.log(`Motion Control Studio on http://localhost:${config.port} — providers: ${p.length ? p.join(", ") : "NONE (set SELFHOSTED_WORKER_URL/TOKEN, FAL_KEY or REPLICATE_API_TOKEN)"}`);
+  const ready = adapters.selfhosted.configured();
+  console.log(`Motion Control Studio on http://localhost:${config.port} — GPU worker: ${ready ? config.selfhostedUrl : "NOT CONFIGURED (set SELFHOSTED_WORKER_URL and SELFHOSTED_WORKER_TOKEN)"}`);
 });

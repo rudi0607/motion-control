@@ -1,4 +1,4 @@
-export type ProviderId = "fal" | "replicate" | "selfhosted";
+export type ProviderId = "selfhosted";
 
 export type Resolution = "720p" | "1080p" | "2k" | "4k";
 export type Fps = 24 | 30 | 50 | 60;
@@ -33,6 +33,8 @@ export interface ModelSpec {
   provider: ProviderId;
   label: string;
   endpoint: string;
+  /** Worker backend this model requires (WAN_BACKEND on the GPU worker). */
+  workerBackend: "animate-14b" | "vace-1.3b";
   description: string;
   pricing: string;
   minDurationSec: number;

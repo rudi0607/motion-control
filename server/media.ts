@@ -163,11 +163,11 @@ export function buildRenderFilter(src: MediaInfo, o: RenderOptions): { filter: s
         : `Downscaled from native ${src.width}×${src.height}.`,
     );
   }
-  if (o.durationSec > src.durationSec + 0.05) {
-    const pad = o.durationSec - src.durationSec;
-    filters.push(`tpad=stop_mode=clone:stop_duration=${pad.toFixed(3)}`);
-    notes.push(`Model output was ${pad.toFixed(2)} s shorter than the reference; held the last frame to match duration.`);
-  }
+  const shortfall = o.durationSec - src.durationSec;
+  if (shortfall > 0.05)
+    notes.push(`Model output was ${shortfall.toFixed(2)} s shorter than the reference; held the last frame to match duration.`);
+  // Pad before minterpolate (it drops the tail and ignores a later tpad); -t trims to the exact length.
+  filters.unshift(`tpad=stop_mode=clone:stop_duration=${(Math.max(0, shortfall) + 0.5).toFixed(3)}`);
   filters.push("format=yuv420p");
   return { filter: filters.join(","), notes };
 }

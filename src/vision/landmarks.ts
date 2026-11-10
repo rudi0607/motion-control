@@ -1,10 +1,11 @@
 import { FaceLandmarker, FilesetResolver, HandLandmarker, PoseLandmarker } from "@mediapipe/tasks-vision";
 
-const MODEL_BASE = "https://storage.googleapis.com/mediapipe-models";
+// Served from public/mediapipe/models so tracking never leaves this server.
+const MODEL_BASE = "/mediapipe/models";
 const MODELS = {
-  pose: `${MODEL_BASE}/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task`,
-  hand: `${MODEL_BASE}/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task`,
-  face: `${MODEL_BASE}/face_landmarker/face_landmarker/float16/latest/face_landmarker.task`,
+  pose: `${MODEL_BASE}/pose_landmarker_full.task`,
+  hand: `${MODEL_BASE}/hand_landmarker.task`,
+  face: `${MODEL_BASE}/face_landmarker.task`,
 };
 
 export interface Pt {
@@ -83,7 +84,7 @@ async function create(mode: Mode): Promise<LandmarkerSet> {
 function getSet(mode: Mode) {
   sets[mode] ??= create(mode).catch((e) => {
     delete sets[mode];
-    throw new Error(`Could not load MediaPipe landmark models (${e?.message ?? e}). Landmark tracking needs access to storage.googleapis.com.`);
+    throw new Error(`Could not load MediaPipe landmark models (${e?.message ?? e}). Check that public/mediapipe/models is deployed.`);
   });
   return sets[mode]!;
 }

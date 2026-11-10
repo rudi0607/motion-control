@@ -173,7 +173,7 @@ export function preflightIssues(image: ImageAnalysis | null, pf: Preflight): Pre
     if (!pf.image.faceDetected) out.push({ level: "warn", text: "No face found in the character image — identity cannot be locked or verified." });
     else out.push({ level: "ok", text: "Character face detected and used as identity reference." });
     if (!pf.image.poseDetected) out.push({ level: "warn", text: "No body pose found in the character image; models need a clearly visible person." });
-    else if ((pf.image.personAreaFraction ?? 1) < 0.05) out.push({ level: "warn", text: "Character occupies less than 5% of the image; Kling recommends a larger subject." });
+    else if ((pf.image.personAreaFraction ?? 1) < 0.05) out.push({ level: "warn", text: "Character occupies less than 5% of the image; use a larger, closer shot of the character." });
     if (image && pf.image.faceBox && pf.image.faceBox.w * image.width < 80) out.push({ level: "warn", text: "Character face is small in the image; fine facial identity may be harder to preserve." });
   }
   if (pf.video) {

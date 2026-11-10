@@ -13,10 +13,15 @@ services:
     restart: unless-stopped
 
   worker:
-    build: ./worker
+    build:
+      context: ./worker
+      args:
+        WAN_BACKEND: ${WAN_BACKEND:-vace-1.3b}
     environment:
       WORKER_TOKEN: ${WORKER_TOKEN:?set WORKER_TOKEN}
       WAN_LOW_VRAM: ${WAN_LOW_VRAM:-false}
+      # 81 frames ≈ 5 s. Use 49 (≈3 s) if an 8 GB GPU runs out of memory.
+      VACE_FRAME_NUM: ${VACE_FRAME_NUM:-81}
       WAN_NUM_GPUS: ${WAN_NUM_GPUS:-1}
       HF_TOKEN: ${HF_TOKEN:-}
     volumes:
