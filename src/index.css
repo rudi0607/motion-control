@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink-950: #07080c;
+  --color-ink-900: #0c0e14;
+  --color-ink-850: #10131b;
+  --color-ink-800: #151924;
+  --color-ink-700: #1f2433;
+  --color-ink-600: #2b3245;
+  --color-ink-400: #6b7390;
+  --color-ink-300: #9aa2bd;
+  --color-accent: #7c5cff;
+  --color-accent-2: #22d3ee;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  @apply bg-ink-950 text-slate-200 antialiased;
+  background-image: radial-gradient(1200px 600px at 10% -10%, rgba(124, 92, 255, 0.12), transparent 60%),
+    radial-gradient(900px 500px at 110% 10%, rgba(34, 211, 238, 0.07), transparent 60%);
+  background-attachment: fixed;
+}
+
+.panel {
+  @apply rounded-2xl border border-ink-700 bg-ink-900/80 backdrop-blur;
+}
+.panel-title {
+  @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-300;
+}
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40;
+}
+.btn-primary {
+  @apply btn bg-gradient-to-r from-accent to-violet-500 text-white shadow-lg shadow-accent/25 hover:brightness-110;
+}
+.btn-ghost {
+  @apply btn border border-ink-600 bg-ink-800 text-slate-200 hover:bg-ink-700;
+}
+.chip {
+  @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium;
+}
+input[type="range"] {
+  accent-color: var(--color-accent);
+}
+select,
+textarea,
+input[type="number"] {
+  @apply rounded-lg border border-ink-600 bg-ink-850 px-2.5 py-1.5 text-sm text-slate-200 outline-none focus:border-accent;
+}
