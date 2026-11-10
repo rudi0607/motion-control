@@ -1,0 +1,38 @@
+# Runs the web app and the GPU worker together on one NVIDIA GPU machine.
+#   export WORKER_TOKEN=$(openssl rand -hex 32)
+#   docker compose up -d --build
+services:
+  app:
+    build: .
+    ports: ["3000:3000"]
+    environment:
+      SELFHOSTED_WORKER_URL: http://worker:8000
+      SELFHOSTED_WORKER_TOKEN: ${WORKER_TOKEN:?set WORKER_TOKEN}
+    volumes: [app-data:/data]
+    depends_on: [worker]
+    restart: unless-stopped
+
+  worker:
+    build: ./worker
+    environment:
+      WORKER_TOKEN: ${WORKER_TOKEN:?set WORKER_TOKEN}
+      WAN_LOW_VRAM: ${WAN_LOW_VRAM:-false}
+      WAN_NUM_GPUS: ${WAN_NUM_GPUS:-1}
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - models:/models
+      - worker-data:/data
+    shm_size: "16gb"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  app-data:
+  models:
+  worker-data:

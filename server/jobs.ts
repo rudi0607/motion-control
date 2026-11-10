@@ -15,7 +15,7 @@ import {
   renderFinal,
   run,
 } from "./media.js";
-import { adapters, getModel } from "./providers/index.js";
+import { PROVIDER_NAME, REQUIRED_ENV, adapters, getModel } from "./providers/index.js";
 import type { GenerationSettings, ModelSpec } from "./providers/types.js";
 import { type QualityCheck, runServerChecks } from "./quality.js";
 
@@ -189,11 +189,7 @@ export async function probeInputs(imagePath: string, videoPath: string) {
 export async function createJob(input: CreateJobInput): Promise<Job> {
   const adapter = adapters[input.model.provider];
   if (!adapter.configured())
-    throw new Error(
-      input.model.provider === "fal"
-        ? "FAL_KEY is not set on the server, so fal.ai models cannot run. Add it to the environment and restart."
-        : "REPLICATE_API_TOKEN is not set on the server, so Replicate models cannot run. Add it to the environment and restart.",
-    );
+    throw new Error(`${REQUIRED_ENV[input.model.provider]} is not set on the server, so ${input.model.label} cannot run. Add it to the environment and restart.`);
   const { imageInfo, videoInfo } = await probeInputs(input.imagePath, input.videoPath);
   const v = validateInputs(input.model, input.settings, imageInfo, videoInfo);
   if (v.errors.length) throw new Error(v.errors.join(" "));
@@ -275,8 +271,8 @@ export async function cancelJob(job: Job) {
 
 class Canceled extends Error {}
 
-async function download(url: string, to: string) {
-  const res = await fetch(url);
+async function download(url: string, to: string, headers?: Record<string, string>) {
+  const res = await fetch(url, { headers });
   if (!res.ok || !res.body) throw new Error(`Downloading model output failed: HTTP ${res.status}`);
   await fs.writeFile(to, Buffer.from(await res.arrayBuffer()));
 }
@@ -374,7 +370,7 @@ async function runPipeline(job: Job, model: ModelSpec) {
     const up = async (name: string, type: string) => adapter.upload(await fs.readFile(p(name)), name, type);
     const [imageUrl, videoUrl] = await Promise.all([up("character.png", "image/png"), up("reference.mp4", "video/mp4")]);
     const identityImageUrls = useElement ? await Promise.all(identity.map((f) => up(f, "image/png"))) : [];
-    await setStage(job, current, "done", `Uploaded ${2 + identityImageUrls.length} file(s) to ${model.provider === "fal" ? "fal.ai" : "Replicate"} storage`);
+    await setStage(job, current, "done", `Uploaded ${2 + identityImageUrls.length} file(s) to ${PROVIDER_NAME[model.provider]}`);
     check();
 
     // 5. Generate.
@@ -434,14 +430,14 @@ async function pollUntilDone(job: Job, model: ModelSpec, ctl: { cancel: boolean 
     } else if (r.state === "running") {
       job.provider.queuePosition = undefined;
       const elapsed = Math.round((Date.now() - (job.provider.submittedAt ?? Date.now())) / 1000);
-      st.detail = `Generating on ${model.provider === "fal" ? "fal.ai" : "Replicate"} GPU (${elapsed} s elapsed)${r.logs.length ? ` — ${r.logs[r.logs.length - 1]}` : ""}`;
+      st.detail = `Generating on ${PROVIDER_NAME[model.provider]} GPU (${elapsed} s elapsed)${r.logs.length ? ` — ${r.logs[r.logs.length - 1]}` : ""}`;
     } else if (r.state === "failed") {
       throw new Error(`Generation failed: ${r.error}`);
     } else {
       job.provider.meta = r.meta;
       st.detail = "Downloading result…";
       await save(job);
-      await download(r.outputUrl, path.join(jobDir(job.id), "raw.mp4"));
+      await download(r.outputUrl, path.join(jobDir(job.id), "raw.mp4"), r.outputHeaders);
       return;
     }
     await save(job);

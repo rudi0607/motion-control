@@ -1,7 +1,7 @@
 import type { GenerationSettings } from "./providers/types.js";
 
 export const DEFAULT_SETTINGS: GenerationSettings = {
-  modelId: "kling-v3-pro",
+  modelId: "wan-2.2-animate-selfhosted",
   resolution: "1080p",
   fps: 30,
   motionStrength: 100,

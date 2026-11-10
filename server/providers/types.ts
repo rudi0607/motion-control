@@ -1,4 +1,4 @@
-export type ProviderId = "fal" | "replicate";
+export type ProviderId = "fal" | "replicate" | "selfhosted";
 
 export type Resolution = "720p" | "1080p" | "2k" | "4k";
 export type Fps = 24 | 30 | 50 | 60;
@@ -70,7 +70,7 @@ export interface SubmitResult {
 export type PollResult =
   | { state: "queued"; queuePosition?: number; logs: string[] }
   | { state: "running"; logs: string[] }
-  | { state: "succeeded"; outputUrl: string; logs: string[]; meta?: Record<string, unknown> }
+  | { state: "succeeded"; outputUrl: string; outputHeaders?: Record<string, string>; logs: string[]; meta?: Record<string, unknown> }
   | { state: "failed"; error: string; logs: string[] };
 
 export interface ProviderAdapter {

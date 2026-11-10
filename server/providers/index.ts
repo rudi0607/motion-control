@@ -1,8 +1,15 @@
 import { falAdapter } from "./fal.js";
 import { replicateAdapter } from "./replicate.js";
+import { selfhostedAdapter } from "./selfhosted.js";
 import type { ModelSpec, ProviderAdapter, ProviderId } from "./types.js";
 
-export const adapters: Record<ProviderId, ProviderAdapter> = { fal: falAdapter, replicate: replicateAdapter };
+export const adapters: Record<ProviderId, ProviderAdapter> = { fal: falAdapter, replicate: replicateAdapter, selfhosted: selfhostedAdapter };
+export const REQUIRED_ENV: Record<ProviderId, string> = {
+  fal: "FAL_KEY",
+  replicate: "REPLICATE_API_TOKEN",
+  selfhosted: "SELFHOSTED_WORKER_URL + SELFHOSTED_WORKER_TOKEN",
+};
+export const PROVIDER_NAME: Record<ProviderId, string> = { fal: "fal.ai", replicate: "Replicate", selfhosted: "your self-hosted worker" };
 
 const NO_MOTION_STRENGTH = {
   supported: false,
@@ -41,6 +48,28 @@ const kling = (tier: "pro" | "standard"): ModelSpec => ({
 });
 
 export const MODELS: ModelSpec[] = [
+  {
+    id: "wan-2.2-animate-selfhosted",
+    provider: "selfhosted",
+    label: "Wan 2.2 Animate 14B (self-hosted GPU)",
+    endpoint: "worker:/v1/jobs (Wan2.2-Animate-14B)",
+    description:
+      "Open-source Wan2.2-Animate running on your own GPU worker (see worker/). No third-party API, and your images and videos never leave your infrastructure.",
+    pricing: "Your GPU cost only",
+    minDurationSec: 1,
+    maxDurationSec: () => Number(process.env.SELFHOSTED_MAX_DURATION_SEC ?? 30),
+    nativeResolution: "720p @ 30 fps",
+    capabilities: {
+      identityElement: { supported: false, how: "Identity comes from the character image (Wan-Animate reference encoder)." },
+      cameraMotion: { supported: false, how: "Keeps the character image framing; camera motion is not transferred." },
+      audio: { supported: true, how: "Reference audio is muxed back in by ffmpeg after generation." },
+      seed: { supported: true, how: "Seed is passed to generate.py --base_seed." },
+      nativeFps: { supported: false, how: "Generates at 30 fps; other rates are converted by ffmpeg." },
+      motionStrength: NO_MOTION_STRENGTH,
+      qualityControls: { supported: true, how: "Maximum: refert_num=5 and 30 sampling steps. Balanced: refert_num=1 and 20 steps." },
+      promptGuidance: { supported: false, how: "Wan-Animate uses its built-in prompt; detail and scene options have no effect." },
+    },
+  },
   kling("pro"),
   kling("standard"),
   {

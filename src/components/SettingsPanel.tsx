@@ -77,7 +77,7 @@ export function SettingsPanel(props: {
                 {m.available ? (
                   <span className="chip bg-emerald-500/15 text-emerald-300">ready</span>
                 ) : (
-                  <span className="chip bg-amber-500/15 text-amber-300">needs {m.provider === "fal" ? "FAL_KEY" : "REPLICATE_API_TOKEN"}</span>
+                  <span className="chip bg-amber-500/15 text-amber-300">needs {m.requiredEnv}</span>
                 )}
               </div>
               {m.id === s.modelId && (

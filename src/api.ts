@@ -15,11 +15,13 @@ export interface ModelInfo {
   maxDuration: { cameraOn: number; cameraOff: number };
   nativeResolution: string;
   available: boolean;
+  requiredEnv: string;
   capabilities: Record<string, Capability>;
 }
 
 export interface AppConfig {
   providers: Record<ProviderId, boolean>;
+  selfhostedHealth: { ok: boolean; problems: string[]; gpus: string[] } | null;
   defaults: GenerationSettings;
   maxUploadMB: number;
   models: ModelInfo[];

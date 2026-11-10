@@ -9,7 +9,8 @@
     "build": "vite build && tsc -p tsconfig.json --noEmit",
     "start": "NODE_ENV=production tsx server/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:worker": "cd worker && .venv/bin/python -m pytest -q"
   },
   "engines": {
     "node": ">=20"

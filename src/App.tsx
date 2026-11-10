@@ -129,7 +129,7 @@ export default function App() {
   const blockers = [
     !imageFile && "Upload a character image",
     !videoFile && "Upload a reference video",
-    !model?.available && `${model?.label} needs ${model?.provider === "fal" ? "FAL_KEY" : "REPLICATE_API_TOKEN"} on the server`,
+    !model?.available && `${model?.label} needs ${model?.requiredEnv} on the server`,
     durationBlock && `Reference is ${refDuration?.toFixed(1)} s; this model/setting allows ${maxDur} s (enable trim)`,
     analyzing && "Wait for landmark analysis to finish",
     !consent && "Confirm you have rights to the character image",
@@ -157,7 +157,13 @@ export default function App() {
     }
   };
 
-  const noProvider = !config.providers.fal && !config.providers.replicate;
+  const noProvider = !config.providers.fal && !config.providers.replicate && !config.providers.selfhosted;
+  const sh = config.selfhostedHealth;
+  const chip = (on: boolean, label: string, state: string) => (
+    <span className={`chip ${on ? "bg-emerald-500/15 text-emerald-300" : "bg-ink-800 text-ink-400"}`}>
+      {label} {state}
+    </span>
+  );
 
   return (
     <div className="mx-auto flex min-h-full max-w-[1680px] flex-col gap-4 p-4">
@@ -174,18 +180,25 @@ export default function App() {
             <p className="text-xs text-ink-400">Animate your existing character with motion from any reference video</p>
           </div>
         </div>
-        <div className="flex gap-2 text-xs">
-          <span className={`chip ${config.providers.fal ? "bg-emerald-500/15 text-emerald-300" : "bg-ink-800 text-ink-400"}`}>fal.ai {config.providers.fal ? "connected" : "not configured"}</span>
-          <span className={`chip ${config.providers.replicate ? "bg-emerald-500/15 text-emerald-300" : "bg-ink-800 text-ink-400"}`}>
-            Replicate {config.providers.replicate ? "connected" : "not configured"}
-          </span>
+        <div className="flex flex-wrap gap-2 text-xs">
+          {chip(!!sh?.ok, "Self-hosted GPU", !config.providers.selfhosted ? "not configured" : sh?.ok ? `ready · ${sh.gpus.join(", ")}` : "unhealthy")}
+          {chip(config.providers.fal, "fal.ai", config.providers.fal ? "connected" : "not configured")}
+          {chip(config.providers.replicate, "Replicate", config.providers.replicate ? "connected" : "not configured")}
         </div>
       </header>
 
+      {config.providers.selfhosted && sh && !sh.ok && (
+        <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+          Self-hosted GPU worker is not ready: {sh.problems.join(" · ")}
+        </div>
+      )}
+
       {noProvider && (
         <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-          No generation provider is configured. Set <code className="text-amber-300">FAL_KEY</code> (Kling v3 Motion Control, Wan 2.2 Animate) and/or{" "}
-          <code className="text-amber-300">REPLICATE_API_TOKEN</code> on the server and restart. Uploading and landmark analysis work without a key; generation does not.
+          No generation backend is configured. Deploy the GPU worker in <code className="text-amber-300">worker/</code> and set{" "}
+          <code className="text-amber-300">SELFHOSTED_WORKER_URL</code> + <code className="text-amber-300">SELFHOSTED_WORKER_TOKEN</code>, or set{" "}
+          <code className="text-amber-300">FAL_KEY</code> / <code className="text-amber-300">REPLICATE_API_TOKEN</code>, then restart. Uploading and landmark analysis work
+          without a backend; generation does not.
         </div>
       )}
 

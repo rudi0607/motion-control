@@ -6,5 +6,7 @@ export const config = {
   maxUploadBytes: Number(process.env.MAX_UPLOAD_MB ?? 200) * 1024 * 1024,
   falKey: process.env.FAL_KEY?.trim() || undefined,
   replicateToken: process.env.REPLICATE_API_TOKEN?.trim() || undefined,
+  selfhostedUrl: process.env.SELFHOSTED_WORKER_URL?.trim() || undefined,
+  selfhostedToken: process.env.SELFHOSTED_WORKER_TOKEN?.trim() || undefined,
   isProd: process.env.NODE_ENV === "production",
 };

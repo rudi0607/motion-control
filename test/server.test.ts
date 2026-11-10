@@ -6,6 +6,7 @@ import { frameStats, freezeIntervals, prepareReferenceVideo, probe, renderFinal,
 import { runServerChecks } from "../server/quality";
 import { buildFalInput } from "../server/providers/fal";
 import { buildReplicateInput } from "../server/providers/replicate";
+import { buildSelfhostedInput } from "../server/providers/selfhosted";
 import { getModel } from "../server/providers/index";
 import { parseSettings } from "../server/settings";
 import { validateInputs } from "../server/jobs";
@@ -68,6 +69,12 @@ describe("provider payloads", () => {
     const input = buildFalInput(getModel("wan-2.2-animate-fal")!, req({ seed: 42, motionAccuracy: "maximum" })) as any;
     expect(input).toMatchObject({ resolution: "720p", num_inference_steps: 30, video_quality: "maximum", seed: 42 });
     expect(input.prompt).toBeUndefined();
+  });
+
+  it("Self-hosted worker maps accuracy, seed and file ids", () => {
+    const input = buildSelfhostedInput(req({ seed: 9, motionAccuracy: "maximum" })) as any;
+    expect(input).toEqual({ image_file: "https://x/img.png", video_file: "https://x/ref.mp4", resolution: "720p", refert_num: 5, sample_steps: 30, seed: 9 });
+    expect(buildSelfhostedInput(req({ motionAccuracy: "balanced" }))).toMatchObject({ refert_num: 1, sample_steps: 20 });
   });
 
   it("Wan (Replicate) generates natively at the requested fps", () => {

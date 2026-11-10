@@ -2,12 +2,13 @@
 
 Animate an **existing AI character image** with the motion from any **reference video**. The character image is the only identity source; the reference video is used purely as a motion source.
 
-Generation runs on real hosted motion-transfer models. Nothing is simulated: if no provider key is configured, or a provider fails, the UI shows the actual error.
+Generation runs on a real motion-transfer model. You can run the open-source model on **your own GPU** (no third-party API), or use hosted models through fal.ai or Replicate. Nothing is simulated: if no backend is configured, or generation fails, the UI shows the actual error.
 
 ## Models
 
 | Model | Provider | Identity | Notes |
 |---|---|---|---|
+| **Wan 2.2 Animate 14B (self-hosted)** | Your own GPU (`worker/`) | Character image | Open-source model, no third-party API. See [worker/README.md](worker/README.md) |
 | Kling v3 Pro Motion Control | fal.ai (`fal-ai/kling-video/v3/pro/motion-control`) | Facial element binding (`@Element1`) from an automatic face crop + optional extra angles | Orientation `video` (≤30 s, complex motion) or `image` (≤10 s, follows camera motion; no element binding) |
 | Kling v3 Standard Motion Control | fal.ai | Same as Pro | Cheaper |
 | Wan 2.2 Animate Move | fal.ai (`fal-ai/wan/v2.2-14b/animate/move`) | Character image | Seeded, 720p, no text prompt |
@@ -15,6 +16,16 @@ Generation runs on real hosted motion-transfer models. Nothing is simulated: if 
 
 ## Setup
 
+### Fully self-hosted (one NVIDIA GPU machine, 48 GB+ VRAM)
+
+```bash
+export WORKER_TOKEN=$(openssl rand -hex 32)
+docker compose up -d --build     # web app on :3000, GPU worker on the internal network
+```
+
+On first boot the worker downloads the Wan2.2-Animate-14B weights (about 100 GB). GPU sizing, a split app/worker setup, and the worker API are covered in [worker/README.md](worker/README.md).
+
+### Local development
 ```bash
 npm install
 cp .env.example .env   # then set FAL_KEY and/or REPLICATE_API_TOKEN

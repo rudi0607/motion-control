@@ -4,7 +4,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
 import { cancelJob, createJob, events, getJob, jobDir, listJobs, regenerate, restoreJobs, saveClientChecks, type Job } from "./jobs.js";
-import { MODELS, adapters, getModel } from "./providers/index.js";
+import { MODELS, REQUIRED_ENV, adapters, getModel } from "./providers/index.js";
+import { selfhostedHealth } from "./providers/selfhosted.js";
 import type { QualityCheck } from "./quality.js";
 import { DEFAULT_SETTINGS, parseSettings } from "./settings.js";
 
@@ -34,9 +35,11 @@ const upload = multer({
 
 const publicJob = (j: Job) => j;
 
-app.get("/api/config", (_req, res) => {
+app.get("/api/config", async (_req, res) => {
+  const selfhosted = adapters.selfhosted.configured() ? await selfhostedHealth() : null;
   res.json({
-    providers: { fal: adapters.fal.configured(), replicate: adapters.replicate.configured() },
+    providers: { fal: adapters.fal.configured(), replicate: adapters.replicate.configured(), selfhosted: adapters.selfhosted.configured() },
+    selfhostedHealth: selfhosted,
     defaults: DEFAULT_SETTINGS,
     maxUploadMB: config.maxUploadBytes / 1024 / 1024,
     models: MODELS.map((m) => ({
@@ -44,6 +47,7 @@ app.get("/api/config", (_req, res) => {
       maxDurationSec: undefined,
       maxDuration: { cameraOn: m.maxDurationSec({ ...DEFAULT_SETTINGS, cameraMotionTransfer: true }), cameraOff: m.maxDurationSec({ ...DEFAULT_SETTINGS, cameraMotionTransfer: false }) },
       available: adapters[m.provider].configured(),
+      requiredEnv: REQUIRED_ENV[m.provider],
     })),
   });
 });
@@ -172,6 +176,6 @@ if (config.isProd) {
 }
 
 app.listen(config.port, "0.0.0.0", () => {
-  const p = [adapters.fal.configured() && "fal.ai", adapters.replicate.configured() && "Replicate"].filter(Boolean);
-  console.log(`Motion Control Studio on http://localhost:${config.port} — providers: ${p.length ? p.join(", ") : "NONE (set FAL_KEY or REPLICATE_API_TOKEN)"}`);
+  const p = [adapters.selfhosted.configured() && "self-hosted GPU", adapters.fal.configured() && "fal.ai", adapters.replicate.configured() && "Replicate"].filter(Boolean);
+  console.log(`Motion Control Studio on http://localhost:${config.port} — providers: ${p.length ? p.join(", ") : "NONE (set SELFHOSTED_WORKER_URL/TOKEN, FAL_KEY or REPLICATE_API_TOKEN)"}`);
 });
