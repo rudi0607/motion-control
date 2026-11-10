@@ -114,12 +114,13 @@ export default function App() {
 
   const elementMode = model?.capabilities.identityElement.supported && settings.identityLock && !settings.cameraMotionTransfer;
   const identityState: IdentityState = (() => {
-    const vc = activeJob?.quality?.clientChecks?.find((c) => c.id === "identity");
+    // Prefer the ArcFace face-recognition check from the worker over the browser's geometric proxy.
+    const vc = activeJob?.quality?.checks?.find((c) => c.id === "identity_arcface") ?? activeJob?.quality?.clientChecks?.find((c) => c.id === "identity");
     if (vc && activeJob?.status === "succeeded") return { kind: "verified", check: vc };
     if (!imageFile) return { kind: "none" };
     if (imageState === "running") return { kind: "analyzing" };
     if (imageAnalysis && !imageAnalysis.frame.face) return { kind: "no-face" };
-    return { kind: "locked", mode: !settings.identityLock ? "off" : elementMode ? "element" : "prompt" };
+    return { kind: "locked", mode: !settings.identityLock ? "off" : elementMode ? "element" : "facelock" };
   })();
 
   const maxDur = model ? (settings.cameraMotionTransfer ? model.maxDuration.cameraOn : model.maxDuration.cameraOff) : 0;

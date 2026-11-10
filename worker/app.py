@@ -44,8 +44,12 @@ class Settings:
     wan21_repo: Path = Path(os.environ.get("WAN21_REPO", "/opt/Wan2.1"))
     vace_repo: Path = Path(os.environ.get("VACE_REPO", "/opt/VACE"))
     vace_ckpt_dir: Path = Path(os.environ.get("VACE_CKPT_DIR", "/models/Wan2.1-VACE-1.3B"))
-    # Must be 4n+1. 81 frames = ~5 s at 16 fps; lower it if an 8 GB GPU runs out of memory.
+    # Must be 4n+1. 81 frames = ~5 s per generated part at 16 fps; lower it if an 8 GB GPU runs out of memory.
     vace_frames: int = int(os.environ.get("VACE_FRAME_NUM", "81"))
+    # Frames shared (and crossfaded) between consecutive parts of a long video.
+    vace_overlap: int = int(os.environ.get("VACE_OVERLAP", "8"))
+    facelock_models: Path = Path(os.environ.get("FACELOCK_MODELS_DIR", "/models/facelock"))
+    facelock_script: Path = Path(os.environ.get("FACELOCK_SCRIPT", str(Path(__file__).parent / "facelock.py")))
     python: str = os.environ.get("WAN_PYTHON", "python")
     # Retargeting with FLUX Kontext adapts the reference skeleton to the character's body shape.
     use_flux: bool = env_bool("WAN_USE_FLUX", True)
@@ -53,16 +57,16 @@ class Settings:
     # Offload + dtype conversion + T5 on CPU for GPUs with < 80 GB. Always on for vace-1.3b.
     low_vram: bool = env_bool("WAN_LOW_VRAM", False)
     num_gpus: int = int(os.environ.get("WAN_NUM_GPUS", "1"))
-    max_duration_sec: float = float(os.environ.get("WORKER_MAX_DURATION_SEC", "30"))
+    # Longer references are generated in parts and joined (vace) or natively (animate-14b).
+    max_duration_sec: float = float(os.environ.get("WORKER_MAX_DURATION_SEC", "60"))
     timeout_sec: int = int(os.environ.get("WORKER_JOB_TIMEOUT_SEC", str(3 * 3600)))
 
     def effective_max_duration(self) -> float:
-        if self.backend == "vace-1.3b":
-            return round((self.vace_frames - 1) / VACE_FPS, 2)
         return self.max_duration_sec
 
 
 VACE_FPS = 16
+FACELOCK_FILES = ("scrfd_2.5g.onnx", "arcface_w600k_r50.onnx", "inswapper_128.onnx", "gfpgan_1.4.onnx")
 VACE_PROMPT = (
     "The person from the reference image performs the movements of the pose video. "
     "Keep the exact same face, identity, skin tone, hairstyle, clothing and body proportions as the reference image. "
@@ -80,6 +84,10 @@ class JobParams(BaseModel):
     sample_steps: int = Field(20, ge=4, le=60)
     seed: Optional[int] = None
     retarget: Optional[bool] = None
+    # Re-apply the character's face identity to every generated frame.
+    face_lock: bool = True
+    # 0 = no face restoration, 1 = full GFPGAN (smooths skin). 0.6 keeps natural texture.
+    face_restore: float = Field(0.6, ge=0, le=1)
 
 
 @dataclass
@@ -93,6 +101,7 @@ class Job:
     error: Optional[str] = None
     logs: list = field(default_factory=list)
     commands: list = field(default_factory=list)
+    face_report: Optional[dict] = None
 
 
 jobs: dict[str, Job] = {}
@@ -167,10 +176,11 @@ def video_size(path: Path) -> tuple[int, int]:
 
 
 def build_vace_prepare(job: Job) -> list[str]:
-    """Resample the reference to the model's 16 fps and frame budget."""
+    """Resample the reference to the model's 16 fps, capped at the worker's total duration limit."""
     d = job_dir(job.id)
-    return ["ffmpeg", "-hide_banner", "-nostdin", "-y", "-i", str(d / "reference.mp4"),
-            "-vf", f"fps={VACE_FPS}", "-frames:v", str(S.vace_frames), "-an",
+    max_frames = int(S.max_duration_sec * VACE_FPS) + 1
+    return ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(d / "reference.mp4"),
+            "-vf", f"fps={VACE_FPS}", "-frames:v", str(max_frames), "-an",
             "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", str(d / "reference16.mp4")]
 
 
@@ -180,7 +190,7 @@ def build_vace_pose(job: Job) -> list[str]:
             "--video", str(d / "reference16.mp4"), "--pre_save_dir", str(d / "process_results")]
 
 
-def build_vace_generate(job: Job, width: int, height: int, frames: int) -> list[str]:
+def build_vace_generate(job: Job, width: int, height: int, frames: int, pose: Path, out: Path) -> list[str]:
     p = JobParams(**job.params)
     d = job_dir(job.id)
     size = "832*480" if width >= height else "480*832"
@@ -189,29 +199,117 @@ def build_vace_generate(job: Job, width: int, height: int, frames: int) -> list[
         "--task", "vace-1.3B",
         "--size", size,
         "--ckpt_dir", str(S.vace_ckpt_dir),
-        "--src_video", str(d / "process_results" / "src_video-pose.mp4"),
+        "--src_video", str(pose),
         "--src_ref_images", str(d / "character.png"),
         "--frame_num", str(frames),
         "--sample_steps", str(p.sample_steps),
         "--prompt", VACE_PROMPT,
-        "--save_file", str(d / "output.mp4"),
+        "--save_file", str(out),
         # 8 GB cards need the DiT offloaded between steps and T5 on the CPU.
         "--offload_model", "True", "--t5_cpu",
     ]
-    if p.seed is not None:
-        cmd += ["--base_seed", str(p.seed)]
+    # Same seed for every chunk keeps appearance and lighting consistent across joins.
+    cmd += ["--base_seed", str(p.seed if p.seed is not None else job_seed(job))]
     return cmd
 
 
-def vace_frame_count(path: Path) -> int:
+def job_seed(job: Job) -> int:
+    return int(job.id[:8], 16) % (2**31)
+
+
+def count_frames(path: Path) -> int:
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", str(path)],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True, text=True, timeout=300,
     )
-    n = int(out.stdout.strip() or 0)
-    if n < 5:
-        raise RuntimeError(f"Reference video is too short after resampling to {VACE_FPS} fps ({n} frames)")
-    return min(S.vace_frames, ((n - 1) // 4) * 4 + 1)
+    return int(out.stdout.strip() or 0)
+
+
+def plan_chunks(total: int, chunk: int, overlap: int) -> list[tuple[int, int]]:
+    """Frame ranges [start, end) covering `total` frames. Each length is 4n+1; consecutive chunks overlap."""
+    if total < 5:
+        raise RuntimeError(f"Reference video is too short after resampling to {VACE_FPS} fps ({total} frames)")
+    if total <= chunk:
+        n = ((total - 1) // 4) * 4 + 1
+        return [(0, n)]
+    ranges, start = [], 0
+    step = chunk - overlap
+    while True:
+        end = start + chunk
+        if end >= total:
+            # Align the last chunk to the end; its overlap with the previous one just grows.
+            ranges.append((total - chunk, total))
+            break
+        ranges.append((start, end))
+        start += step
+    return ranges
+
+
+def cut_frames(src: Path, dst: Path, start: int, end: int) -> list[str]:
+    return ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(src),
+            "-vf", f"trim=start_frame={start}:end_frame={end},setpts=PTS-STARTPTS", "-an",
+            "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", str(dst)]
+
+
+def join_chunks(chunks: list[Path], ranges: list[tuple[int, int]], out: Path, fps: int = VACE_FPS) -> int:
+    """Concatenate chunk videos, linearly crossfading the overlapping frames."""
+    import cv2
+    import numpy as np
+
+    frames: dict[int, np.ndarray] = {}
+    weights: dict[int, float] = {}
+    size = None
+    for idx, (path, (s, e)) in enumerate(zip(chunks, ranges)):
+        cap = cv2.VideoCapture(str(path))
+        prev_end = ranges[idx - 1][1] if idx else s
+        ov = max(0, prev_end - s)
+        i = 0
+        while s + i < e:
+            ok, f = cap.read()
+            if not ok:
+                break
+            if size is None:
+                size = (f.shape[1], f.shape[0])
+            elif (f.shape[1], f.shape[0]) != size:
+                f = cv2.resize(f, size)
+            g = s + i
+            # Ramp the new chunk in across the overlap so joins don't pop.
+            w = (i + 1) / (ov + 1) if i < ov else 1.0
+            if g in frames:
+                frames[g] = (frames[g].astype(np.float32) * (1 - w) + f.astype(np.float32) * w)
+                weights[g] = 1.0
+            else:
+                frames[g] = f.astype(np.float32)
+            i += 1
+        cap.release()
+    if not frames or size is None:
+        raise RuntimeError("No frames were generated")
+    n = max(frames) + 1
+    enc = subprocess.Popen(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{size[0]}x{size[1]}",
+         "-r", str(fps), "-i", "-", "-c:v", "libx264", "-crf", "14", "-pix_fmt", "yuv420p", str(out)],
+        stdin=subprocess.PIPE,
+    )
+    last = None
+    for g in range(n):
+        f = frames.get(g, last)
+        last = f
+        enc.stdin.write(np.clip(f, 0, 255).astype(np.uint8).tobytes())
+    enc.stdin.close()
+    if enc.wait() != 0:
+        raise RuntimeError("Encoding the joined video failed")
+    return n
+
+
+def build_facelock(job: Job, p: "JobParams") -> list[str]:
+    d = job_dir(job.id)
+    cmd = [S.python, str(S.facelock_script),
+           "--video", str(d / "output.mp4"), "--character", str(d / "character.png"),
+           "--out", str(d / "output-locked.mp4"), "--models", str(S.facelock_models),
+           "--report", str(d / "facelock.json"), "--restore-blend", str(p.face_restore)]
+    if p.face_restore <= 0:
+        cmd.append("--no-restore")
+    return cmd
 
 
 def run_step(job: Job, cmd: list[str], cwd: Optional[Path] = None) -> None:
@@ -250,15 +348,32 @@ def process(job: Job) -> None:
         persist(job)
         if S.backend == "vace-1.3b":
             run_step(job, build_vace_prepare(job))
-            frames = vace_frame_count(d / "reference16.mp4")
+            total = count_frames(d / "reference16.mp4")
+            ranges = plan_chunks(total, S.vace_frames, S.vace_overlap)
             # VACE annotators resolve models/VACE-Annotators relative to the VACE repo.
             run_step(job, build_vace_pose(job), cwd=S.vace_repo)
-            if not (d / "process_results" / "src_video-pose.mp4").exists():
+            pose = d / "process_results" / "src_video-pose.mp4"
+            if not pose.exists():
                 raise RuntimeError("Pose extraction produced no src_video-pose.mp4 (no person detected?)")
             w, h = video_size(d / "reference16.mp4")
             job.status = "generating"
             persist(job)
-            run_step(job, build_vace_generate(job, w, h, frames), cwd=S.wan21_repo)
+            chunks = []
+            for i, (s, e) in enumerate(ranges):
+                job.logs.append(f"Generating part {i + 1}/{len(ranges)} (frames {s}-{e - 1} of {total})")
+                part_pose, part_out = d / f"pose_{i:03d}.mp4", d / f"part_{i:03d}.mp4"
+                run_step(job, cut_frames(pose, part_pose, s, e))
+                run_step(job, build_vace_generate(job, w, h, e - s, part_pose, part_out), cwd=S.wan21_repo)
+                if not part_out.exists():
+                    raise RuntimeError(f"generate.py wrote no output for part {i + 1}")
+                chunks.append(part_out)
+            if len(chunks) == 1:
+                shutil.move(chunks[0], d / "output.mp4")
+            else:
+                job.logs.append(f"Joining {len(chunks)} parts with {S.vace_overlap}-frame crossfades")
+                join_chunks(chunks, ranges, d / "output.mp4")
+            for f in [*d.glob("pose_*.mp4"), *d.glob("part_*.mp4")]:
+                f.unlink(missing_ok=True)
         else:
             pre, gen = build_commands(job)
             run_step(job, pre)
@@ -267,6 +382,19 @@ def process(job: Job) -> None:
             run_step(job, gen)
         if not (d / "output.mp4").exists():
             raise RuntimeError("generate.py finished but output.mp4 was not written")
+        p = JobParams(**job.params)
+        if p.face_lock:
+            job.status = "face_lock"
+            persist(job)
+            run_step(job, build_facelock(job, p), cwd=Path(__file__).parent)
+            locked = d / "output-locked.mp4"
+            if not locked.exists():
+                raise RuntimeError("Face lock produced no output")
+            shutil.move(d / "output.mp4", d / "output-raw.mp4")
+            shutil.move(locked, d / "output.mp4")
+            report = d / "facelock.json"
+            if report.exists():
+                job.face_report = json.loads(report.read_text())
         job.status = "succeeded"
     except Exception as e:  # noqa: BLE001 - surfaced to the client
         if job.status != "canceled":
@@ -340,6 +468,8 @@ def health(_: None = Depends(auth)):
             problems.append(f"VACE pose annotators not found at {S.vace_repo / 'models/VACE-Annotators/pose'}")
         if not (S.vace_ckpt_dir / "config.json").exists():
             problems.append(f"Wan2.1-VACE-1.3B weights not found at {S.vace_ckpt_dir}")
+        if S.vace_overlap >= S.vace_frames - 4:
+            problems.append(f"VACE_OVERLAP ({S.vace_overlap}) must be smaller than VACE_FRAME_NUM - 4")
         if (S.vace_frames - 1) % 4:
             problems.append(f"VACE_FRAME_NUM must be 4n+1 (got {S.vace_frames})")
     elif S.backend == "animate-14b":
@@ -349,6 +479,9 @@ def health(_: None = Depends(auth)):
             problems.append(f"Wan2.2-Animate-14B weights not found at {S.ckpt_dir}")
     else:
         problems.append(f"Unknown WAN_BACKEND {S.backend!r} (use animate-14b or vace-1.3b)")
+    missing = [f for f in FACELOCK_FILES if not (S.facelock_models / f).exists()]
+    if missing:
+        problems.append(f"Face-lock models missing in {S.facelock_models}: {', '.join(missing)}")
     gpus = gpu_info()
     if not gpus:
         problems.append("No NVIDIA GPU visible (nvidia-smi failed)")
@@ -415,6 +548,7 @@ def _status(job_id: str) -> dict:
         "logs": job.logs[-100:],
         "started_at": job.started_at,
         "ended_at": job.ended_at,
+        "face_report": job.face_report and {k: v for k, v in job.face_report.items() if k != "frames_without_face"},
     }
 
 

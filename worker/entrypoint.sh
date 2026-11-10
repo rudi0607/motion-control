@@ -26,6 +26,17 @@ else
   ln -sfn /models/VACE-Annotators "${VACE_REPO:-/opt/VACE}/models/VACE-Annotators"
 fi
 
+# Face-lock models (identity detection, swap and restoration), ~1 GB, downloaded once.
+FL="${FACELOCK_MODELS_DIR:-/models/facelock}"
+FL_BASE="https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0"
+mkdir -p "$FL"
+for m in scrfd_2.5g.onnx arcface_w600k_r50.onnx inswapper_128.onnx gfpgan_1.4.onnx; do
+  if [ ! -s "$FL/$m" ]; then
+    echo "One-time download: $m -> $FL"
+    curl -fL --retry 3 -o "$FL/$m.part" "$FL_BASE/$m" && mv "$FL/$m.part" "$FL/$m"
+  fi
+done
+
 # From here on nothing may reach the internet: a hidden download fails loudly instead.
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
 

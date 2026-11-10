@@ -5,7 +5,7 @@ FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel
 
 ARG WAN_BACKEND=vace-1.3b
 ENV DEBIAN_FRONTEND=noninteractive PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1
-RUN apt-get update && apt-get install -y --no-install-recommends git ffmpeg libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends git curl ffmpeg libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
 
 # Pinned upstream commits for reproducible builds.
 ARG WAN22_COMMIT=1ea34ff48f87168174e12956e200b1d908b1c5ff
@@ -29,13 +29,14 @@ RUN set -eux; \
 WORKDIR /srv
 COPY requirements.txt .
 RUN pip install -r requirements.txt
-COPY app.py entrypoint.sh ./
+COPY app.py facelock.py entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 
 ENV WAN_BACKEND=${WAN_BACKEND} \
     WAN_REPO=/opt/Wan2.2 WAN_CKPT_DIR=/models/Wan2.2-Animate-14B \
     WAN21_REPO=/opt/Wan2.1 VACE_REPO=/opt/VACE VACE_CKPT_DIR=/models/Wan2.1-VACE-1.3B \
     PYTHONPATH=/opt/VACE \
+    FACELOCK_MODELS_DIR=/models/facelock \
     WORKER_DATA_DIR=/data/jobs PORT=8000
 VOLUME ["/models", "/data"]
 EXPOSE 8000

@@ -165,3 +165,45 @@ export function runServerChecks(i: ServerQcInput): QualityCheck[] {
 
   return checks;
 }
+
+export interface FaceReport {
+  frames: number;
+  frames_with_face: number;
+  similarity_before: { mean: number; min: number; p10: number } | null;
+  similarity_after: { mean: number; min: number; p10: number } | null;
+  per_frame_after?: (number | null)[];
+  restore?: boolean;
+  restore_blend?: number;
+}
+
+/** ArcFace (w600k_r50) cosine similarity at or above this is treated as the same identity. */
+export const SAME_IDENTITY = 0.5;
+
+/** Identity check from the worker's face-lock pass: ArcFace similarity of every frame to the character. */
+export function faceIdentityCheck(r: FaceReport | undefined, outFps: number, rawFps: number): QualityCheck | null {
+  if (!r) return null;
+  const after = r.similarity_after;
+  if (!after) {
+    return {
+      id: "identity_arcface",
+      label: "Face identity (ArcFace)",
+      status: "warn",
+      detail: "No face was found in the generated frames, so identity could not be locked or measured.",
+      source: "ffmpeg",
+    };
+  }
+  const coverage = r.frames ? r.frames_with_face / r.frames : 0;
+  // Per-frame values are at the model's native rate, before frame-rate conversion.
+  const bad = (r.per_frame_after ?? []).flatMap((v, i) => (v !== null && v < SAME_IDENTITY ? [i / rawFps] : []));
+  const status = after.p10 >= SAME_IDENTITY && coverage >= 0.9 ? "pass" : after.mean >= SAME_IDENTITY ? "warn" : "fail";
+  const before = r.similarity_before ? ` (before face lock ${r.similarity_before.mean.toFixed(2)})` : "";
+  return {
+    id: "identity_arcface",
+    label: "Face identity (ArcFace)",
+    status,
+    value: `similarity ${after.mean.toFixed(2)} avg · ${after.min.toFixed(2)} min${before}`,
+    detail: `Face-recognition similarity between your character image and ${r.frames_with_face}/${r.frames} generated frames (≥ ${SAME_IDENTITY} = same identity).${coverage < 0.9 ? " Some frames had no detectable face." : ""}${r.restore ? ` Face restoration blend ${r.restore_blend ?? 1}.` : ""}`,
+    ranges: groupRanges(bad, 1 / (rawFps || outFps)),
+    source: "ffmpeg",
+  };
+}

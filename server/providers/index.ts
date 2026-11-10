@@ -24,10 +24,10 @@ export const MODELS: ModelSpec[] = [
     label: "Wan 2.1 VACE 1.3B (your GPU · 8–12 GB)",
     endpoint: "worker:/v1/jobs (Wan2.1-VACE-1.3B pose-to-video)",
     description:
-      "Low-VRAM local model for consumer GPUs such as an RTX 3050/3060. The worker extracts a pose skeleton from the reference video and renders your character following it. 480p, about 5 s per clip. Identity is weaker than Wan-Animate 14B.",
+      "Low-VRAM local model for consumer GPUs such as an RTX 3050/3060. Follows the reference body pose; long videos are generated in ~5 s parts and crossfaded. Face Lock then re-applies your character's exact face to every frame. 480p native.",
     pricing: "Free · runs on your GPU",
     minDurationSec: 1,
-    maxDurationSec: workerLimit("vace-1.3b", 5),
+    maxDurationSec: workerLimit("vace-1.3b", 60),
     nativeResolution: "480p @ 16 fps",
     capabilities: {
       identityElement: { supported: false, how: "Identity comes from the character image as a VACE reference image." },
@@ -50,7 +50,7 @@ export const MODELS: ModelSpec[] = [
       "Highest-quality local model: full body, face and expression transfer with retargeting to your character's body shape. Needs a 48–80 GB GPU.",
     pricing: "Free · runs on your GPU",
     minDurationSec: 1,
-    maxDurationSec: workerLimit("animate-14b", 30),
+    maxDurationSec: workerLimit("animate-14b", 60),
     nativeResolution: "720p @ 30 fps",
     capabilities: {
       identityElement: { supported: false, how: "Identity comes from the character image (Wan-Animate reference encoder)." },

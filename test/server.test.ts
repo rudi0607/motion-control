@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { frameStats, freezeIntervals, prepareReferenceVideo, probe, renderFinal, run } from "../server/media";
-import { runServerChecks } from "../server/quality";
+import { faceIdentityCheck, runServerChecks } from "../server/quality";
 import { buildSelfhostedInput } from "../server/providers/selfhosted";
 import { getModel } from "../server/providers/index";
 import { parseSettings } from "../server/settings";
@@ -56,9 +56,12 @@ describe("worker payloads", () => {
       resolution: "480p",
       refert_num: 5,
       sample_steps: 40,
+      face_lock: true,
+      face_restore: 0.6,
       seed: 9,
     });
     expect(buildSelfhostedInput(m, req({ motionAccuracy: "balanced" }))).toMatchObject({ sample_steps: 25 });
+    expect(buildSelfhostedInput(m, req({ identityLock: false, faceDetail: false }))).toMatchObject({ face_lock: false, face_restore: 0 });
   });
 
   it("Animate 14B maps accuracy to refert_num and steps", () => {
@@ -70,14 +73,26 @@ describe("worker payloads", () => {
 
 describe("validation", () => {
   const img = { width: 800, height: 1200 } as any;
-  it("enforces the VACE clip limit and allows trimming", () => {
+  it("allows long references up to the worker limit and trims beyond it", () => {
     const m = getModel("wan-2.1-vace-selfhosted")!;
-    const long = { durationSec: 12, width: 1080, height: 1920 } as any;
-    expect(validateInputs(m, parseSettings({}), img, { ...long, durationSec: 4 }).errors).toHaveLength(0);
-    expect(validateInputs(m, parseSettings({}), img, long).errors[0]).toMatch(/at most 5 s/);
+    const long = { durationSec: 75, width: 1080, height: 1920 } as any;
+    expect(validateInputs(m, parseSettings({}), img, { ...long, durationSec: 45 }).errors).toHaveLength(0);
+    expect(validateInputs(m, parseSettings({}), img, long).errors[0]).toMatch(/at most 60 s/);
     const trimmed = validateInputs(m, parseSettings({ trimToModelLimit: true }), img, long);
     expect(trimmed.errors).toHaveLength(0);
     expect(trimmed.warnings.join(" ")).toMatch(/trimmed/);
+  });
+  it("turns the worker's ArcFace report into an identity check", () => {
+    const base = { frames: 32, frames_with_face: 32, similarity_before: { mean: 0.31, min: 0.2, p10: 0.25 } };
+    const pass = faceIdentityCheck({ ...base, similarity_after: { mean: 0.78, min: 0.72, p10: 0.75 } }, 30, 16)!;
+    expect(pass.status).toBe("pass");
+    expect(pass.value).toContain("0.78");
+    const per = Array.from({ length: 32 }, (_, i) => (i >= 16 && i < 20 ? 0.3 : 0.7));
+    const warn = faceIdentityCheck({ ...base, similarity_after: { mean: 0.65, min: 0.3, p10: 0.4 }, per_frame_after: per }, 30, 16)!;
+    expect(warn.status).toBe("warn");
+    expect(warn.ranges?.[0].start).toBeCloseTo(1, 5);
+    expect(faceIdentityCheck({ ...base, similarity_after: { mean: 0.3, min: 0.1, p10: 0.2 } }, 30, 16)!.status).toBe("fail");
+    expect(faceIdentityCheck(undefined, 30, 16)).toBeNull();
   });
   it("rejects tiny or extreme-aspect character images", () => {
     const m = getModel("wan-2.2-animate-selfhosted")!;

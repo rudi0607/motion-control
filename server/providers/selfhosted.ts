@@ -41,6 +41,9 @@ export function buildSelfhostedInput(model: ModelSpec, req: GenerateRequest): Re
     resolution: vace ? "480p" : "720p",
     refert_num: max ? 5 : 1,
     sample_steps: vace ? (max ? 40 : 25) : max ? 30 : 20,
+    face_lock: s.identityLock,
+    // Facial Detail Enhancement: partial GFPGAN blend keeps natural skin texture.
+    face_restore: s.faceDetail ? 0.6 : 0,
   };
   if (s.seed !== null) input.seed = s.seed;
   return input;
@@ -88,18 +91,26 @@ export const selfhostedAdapter: ProviderAdapter = {
     return { requestId: body.id, sentInput: input };
   },
 
-  async poll(_model, requestId): Promise<PollResult> {
+  async poll(model, requestId): Promise<PollResult> {
     const s = await call(`/v1/jobs/${requestId}`);
     const logs: string[] = s.logs ?? [];
     switch (s.status) {
       case "queued":
         return { state: "queued", queuePosition: s.queue_position ?? undefined, logs };
       case "preprocessing":
-        return { state: "running", logs: [...logs, "Stage: pose/face extraction + retargeting"] };
+        return { state: "running", logs: [...logs, "Stage: pose extraction"] };
       case "generating":
-        return { state: "running", logs: [...logs, "Stage: Wan2.2-Animate diffusion"] };
+        return { state: "running", logs: [...logs, `Stage: ${model.workerBackend === "vace-1.3b" ? "Wan2.1-VACE" : "Wan2.2-Animate"} diffusion`] };
+      case "face_lock":
+        return { state: "running", logs: [...logs, "Stage: face identity lock + restoration"] };
       case "succeeded":
-        return { state: "succeeded", outputUrl: `${base()}/v1/jobs/${requestId}/output`, outputHeaders: authHeaders(), logs };
+        return {
+          state: "succeeded",
+          outputUrl: `${base()}/v1/jobs/${requestId}/output`,
+          outputHeaders: authHeaders(),
+          logs,
+          meta: s.face_report ? { faceReport: s.face_report } : undefined,
+        };
       default:
         return { state: "failed", error: s.error ?? `Worker job ${s.status}`, logs };
     }

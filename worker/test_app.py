@@ -23,6 +23,12 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("WAN_CKPT_DIR", str(tmp_path / "ckpt"))
     monkeypatch.setenv("WORKER_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("WAN_PYTHON", sys.executable)
+    monkeypatch.setenv("FACELOCK_SCRIPT", str(STUBS / "facelock.py"))
+    fl = tmp_path / "facelock-models"
+    fl.mkdir()
+    for name in ("scrfd_2.5g.onnx", "arcface_w600k_r50.onnx", "inswapper_128.onnx", "gfpgan_1.4.onnx"):
+        (fl / name).write_bytes(b"")
+    monkeypatch.setenv("FACELOCK_MODELS_DIR", str(fl))
     sys.path.insert(0, str(Path(__file__).parent))
     import app as worker
 

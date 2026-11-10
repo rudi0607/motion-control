@@ -55,7 +55,6 @@ export function SettingsPanel(props: {
   const caps = model?.capabilities;
   const maxDur = model ? (s.cameraMotionTransfer ? model.maxDuration.cameraOn : model.maxDuration.cameraOff) : 0;
   const tooLong = props.referenceDuration !== null && props.referenceDuration > maxDur + 0.05;
-  const elementActive = !!caps?.identityElement.supported && s.identityLock && !s.cameraMotionTransfer;
   const noPrompt = !caps?.promptGuidance.supported;
 
   return (
@@ -135,13 +134,23 @@ export function SettingsPanel(props: {
       <section className="space-y-1">
         <div className="panel-title mb-1">Identity</div>
         <Toggle
-          label="Face Preservation & Identity Consistency"
+          label="Face Lock (identity)"
           badge={s.identityLock ? "Maximum" : "Off"}
-          hint={elementActive ? "Facial element binding + identity prompt." : s.identityLock ? "Identity prompt + character image (element binding unavailable for this model/setting)." : "Model relies on the image alone."}
+          hint={
+            s.identityLock
+              ? "After generation, every frame's face is replaced with your character's face identity (ArcFace + inswapper) and measured."
+              : "Off: the model's own face is kept, so identity may drift."
+          }
           checked={s.identityLock}
           onChange={(v) => set("identityLock", v)}
         />
-        <Toggle label="Facial Detail Enhancement" hint="Blinking, expression, teeth & lips guidance." checked={s.faceDetail} onChange={(v) => set("faceDetail", v)} disabled={noPrompt} badge="prompt" />
+        <Toggle
+          label="Facial Detail Enhancement"
+          hint="GFPGAN face restoration, blended at 60% to keep natural skin texture."
+          checked={s.faceDetail}
+          onChange={(v) => set("faceDetail", v)}
+          disabled={!s.identityLock}
+        />
         <Toggle label="Hand Detail Enhancement" hint="Five-finger, natural-joint guidance." checked={s.handDetail} onChange={(v) => set("handDetail", v)} disabled={noPrompt} badge="prompt" />
         <Toggle label="Background Preservation" hint="Keep the character image's background." checked={s.backgroundPreservation} onChange={(v) => set("backgroundPreservation", v)} disabled={noPrompt} badge="prompt" />
         {noPrompt && <p className="text-[11px] text-amber-300/90">{caps?.promptGuidance.how}</p>}

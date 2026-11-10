@@ -2,3 +2,8 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 huggingface_hub[cli]>=0.27
+# Face identity lock + restoration (onnxruntime-gpu falls back to CPU automatically)
+onnxruntime-gpu==1.20.1
+onnx>=1.16
+opencv-python-headless>=4.10
+numpy<2.3

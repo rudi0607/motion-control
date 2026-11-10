@@ -4,7 +4,7 @@ export type IdentityState =
   | { kind: "none" }
   | { kind: "analyzing" }
   | { kind: "no-face" }
-  | { kind: "locked"; mode: "element" | "prompt" | "off" }
+  | { kind: "locked"; mode: "element" | "facelock" | "off" }
   | { kind: "verified"; check: QualityCheck };
 
 export function IdentityBadge({ state }: { state: IdentityState }) {
@@ -22,10 +22,10 @@ export function IdentityBadge({ state }: { state: IdentityState }) {
       tone = "border-emerald-500/40 bg-emerald-500/10 text-emerald-200";
       title = "Identity locked · element binding";
       text = "A face crop of your character is bound as a facial element. The reference video is used only as a motion source.";
-    } else if (state.mode === "prompt") {
-      tone = "border-amber-500/40 bg-amber-500/10 text-amber-200";
-      title = "Identity locked · image + prompt";
-      text = "This model/setting can't bind a facial element; identity comes from the character image with identity-preservation guidance.";
+    } else if (state.mode === "facelock") {
+      tone = "border-emerald-500/40 bg-emerald-500/10 text-emerald-200";
+      title = "Identity locked · Face Lock";
+      text = "After generation, every frame's face is re-locked to your character with face recognition (ArcFace) and measured. The reference video is only a motion source.";
     } else {
       tone = "border-ink-600 bg-ink-850 text-ink-300";
       title = "Identity lock off";

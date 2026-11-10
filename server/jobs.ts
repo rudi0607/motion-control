@@ -18,7 +18,7 @@ import {
 import { PROVIDER_NAME, REQUIRED_ENV, adapters, getModel } from "./providers/index.js";
 import { selfhostedHealth } from "./providers/selfhosted.js";
 import type { GenerationSettings, ModelSpec } from "./providers/types.js";
-import { type QualityCheck, runServerChecks } from "./quality.js";
+import { type FaceReport, type QualityCheck, faceIdentityCheck, runServerChecks } from "./quality.js";
 
 export type StageStatus = "pending" | "running" | "done" | "failed" | "skipped";
 export interface Stage {
@@ -360,7 +360,7 @@ async function runPipeline(job: Job, model: ModelSpec) {
           ? `facial element bound from ${identity.length} image(s)`
           : "facial element bound from the character image"
         : s.identityLock
-          ? "identity enforced via character image + prompt (no element binding for this model/setting)"
+          ? "Face Lock on: the worker re-applies this face to every generated frame and measures it with ArcFace"
           : "identity lock off",
     ].join(" · ");
     if (pi && !pi.faceDetected) job.warnings.push("No face was detected in the character image; identity preservation cannot be verified automatically.");
@@ -420,7 +420,8 @@ async function pollUntilDone(job: Job, model: ModelSpec, ctl: { cancel: boolean 
       transient = 0;
     } catch (e) {
       // Network blips while polling should not lose a paid generation.
-      if (++transient > 10) throw e;
+      // ~5 min of retries: tolerates a worker container restart without losing a long generation.
+      if (++transient > 60) throw e;
       await new Promise((res) => setTimeout(res, 5000));
       continue;
     }
@@ -490,7 +491,9 @@ async function continueAfterGeneration(job: Job, model: ModelSpec, ctl: { cancel
     const qc = async () => {
       const info = await probe(p("output.mp4"));
       const [st, fr] = await Promise.all([frameStats(p("output.mp4")), freezeIntervals(p("output.mp4"))]);
-      return runServerChecks({ output: info, outputStats: st, outputFreezes: fr, reference: refInfo, referenceStats: refStats, referenceFreezes: refFreeze, expectAudio: wantAudio });
+      const checks = runServerChecks({ output: info, outputStats: st, outputFreezes: fr, reference: refInfo, referenceStats: refStats, referenceFreezes: refFreeze, expectAudio: wantAudio });
+      const fc = faceIdentityCheck(job.provider.meta?.faceReport as FaceReport | undefined, info.fps || 30, rawInfo.fps || 16);
+      return fc ? [fc, ...checks] : checks;
     };
     let checks = await qc();
     job.quality = { checks };
